@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>True North Guessr</title>
+<meta name="description" content="A Canada-only GeoGuessr-style game. Guess the spot, the city, or the province from real photos.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8D%81%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- HOME -->
+<section id="home" class="screen active">
+  <header class="hero">
+    <div class="logo">🍁 True North <span>Guessr</span></div>
+    <p class="tagline">Real photos from across Canada. Figure out where you are.</p>
+  </header>
+
+  <div class="modes" id="modes"></div>
+
+  <details class="settings" id="settings">
+    <summary>⚙️ Settings</summary>
+    <div class="settings-grid">
+      <label>Rounds
+        <select id="set-rounds"><option>3</option><option selected>5</option><option>10</option></select>
+      </label>
+      <label>Timer per round
+        <select id="set-timer"><option value="0" selected>Off</option><option value="30">30 s</option><option value="60">60 s</option><option value="120">2 min</option></select>
+      </label>
+      <label>Region (Classic &amp; City modes)
+        <select id="set-region"></select>
+      </label>
+      <label>City mode difficulty
+        <select id="set-citydiff"><option value="easy" selected>Easy: 4 choices</option><option value="hard">Hard: type the name</option></select>
+      </label>
+      <label>City for City Streets
+        <select id="set-local"></select>
+      </label>
+      <label>Imagery
+        <select id="set-source"><option value="commons" selected>Photos (Wikimedia Commons, no setup)</option><option value="mapillary">Street level 360 (Mapillary, needs token)</option></select>
+      </label>
+      <label class="wide" id="token-row">Mapillary client token
+        <input id="set-token" placeholder="MLY|..." autocomplete="off" spellcheck="false">
+        <small>Free at mapillary.com/dashboard/developers. Stays in this browser only. Daily Challenge always uses photos so everyone gets the same rounds.</small>
+      </label>
+      <label class="check"><input type="checkbox" id="set-move" checked> Allow moving around (Mapillary)</label>
+    </div>
+  </details>
+
+  <footer class="credits">
+    Photos: <a href="https://commons.wikimedia.org" target="_blank" rel="noopener">Wikimedia Commons</a> contributors (credited after each round) ·
+    Map: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>, © <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>
+  </footer>
+</section>
+
+<!-- GAME -->
+<section id="game" class="screen">
+  <div id="viewer">
+    <div id="photo-wrap"><img id="photo" alt="" draggable="false"></div>
+    <div id="mly"></div>
+    <div id="loading" class="loading"><div class="spinner"></div><p id="loading-text">Finding a spot...</p></div>
+  </div>
+
+  <div class="hud">
+    <button class="hud-btn" id="quit" title="Back to menu">✕</button>
+    <div class="hud-box"><small>Mode</small><b id="hud-mode"></b></div>
+    <div class="hud-box"><small>Round</small><b id="hud-round"></b></div>
+    <div class="hud-box"><small>Score</small><b id="hud-score">0</b></div>
+    <div class="hud-box" id="hud-timer-box"><small>Time</small><b id="hud-timer"></b></div>
+  </div>
+
+  <div id="photo-tabs" class="photo-tabs"></div>
+  <div class="zoom-hint" id="zoom-hint">Scroll or pinch to zoom · drag to look around</div>
+
+  <!-- map guessing panel (classic, local, province) -->
+  <div id="guess-panel" class="guess-panel">
+    <div class="panel-top">
+      <span id="panel-label">Place your pin</span>
+      <button class="mini" id="panel-size" title="Bigger map">⤢</button>
+    </div>
+    <div id="guess-map"></div>
+    <button id="guess-btn" class="primary" disabled>Guess</button>
+  </div>
+
+  <!-- city choices panel -->
+  <div id="city-panel" class="city-panel">
+    <p class="city-q">Which city is this?</p>
+    <div id="city-choices" class="city-choices"></div>
+    <form id="city-form" class="city-form">
+      <input id="city-input" list="city-list" placeholder="Type a city..." autocomplete="off">
+      <datalist id="city-list"></datalist>
+      <button class="primary" id="city-submit">Guess</button>
+    </form>
+  </div>
+
+  <button id="map-toggle" class="map-toggle">🗺️ Map</button>
+</section>
+
+<!-- ROUND RESULT -->
+<section id="result" class="screen">
+  <div id="result-map"></div>
+  <div class="result-card">
+    <div class="result-points" id="res-points"></div>
+    <div class="bar"><div id="res-bar"></div></div>
+    <p id="res-text"></p>
+    <p class="photo-credit" id="res-credit"></p>
+    <button class="primary" id="next-btn">Next round</button>
+  </div>
+</section>
+
+<!-- GAME SUMMARY -->
+<section id="summary" class="screen">
+  <div id="summary-map"></div>
+  <div class="result-card summary-card">
+    <h2 id="sum-title">Game over</h2>
+    <div class="result-points" id="sum-points"></div>
+    <p id="sum-best"></p>
+    <table id="sum-table"></table>
+    <div class="row">
+      <button class="primary" id="again-btn">Play again</button>
+      <button id="share-btn">Share</button>
+      <button id="menu-btn">Menu</button>
+    </div>
+    <p id="share-msg" class="share-msg"></p>
+  </div>
+</section>
+
+<div id="toast" class="toast"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
