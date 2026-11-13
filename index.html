@@ -39,13 +39,22 @@
         <select id="set-local"></select>
       </label>
       <label>Imagery
-        <select id="set-source"><option value="commons" selected>Photos (Wikimedia Commons, no setup)</option><option value="mapillary">Street level 360 (Mapillary, needs token)</option></select>
+        <select id="set-source">
+          <option value="streetview" selected>Google Street View (no key needed)</option>
+          <option value="google">Google Street View with my API key (best)</option>
+          <option value="mapillary">Mapillary 360 (needs token)</option>
+          <option value="commons">Photos only (Wikimedia Commons)</option>
+        </select>
       </label>
       <label class="wide" id="token-row">Mapillary client token
         <input id="set-token" placeholder="MLY|..." autocomplete="off" spellcheck="false">
         <small>Free at mapillary.com/dashboard/developers. Stays in this browser only. Daily Challenge always uses photos so everyone gets the same rounds.</small>
       </label>
-      <label class="check"><input type="checkbox" id="set-move" checked> Allow moving around (Mapillary)</label>
+      <label class="wide" id="gkey-row">Google Maps API key
+        <input id="set-gkey" placeholder="AIza..." autocomplete="off" spellcheck="false">
+        <small>Make one at console.cloud.google.com → APIs &amp; Services → enable "Maps JavaScript API" → Credentials → Create API key. Restrict it to splitshotz.github.io. Google's free monthly allowance covers casual play. With a key the game checks that Street View exists before dropping you, and the address bar is hidden.</small>
+      </label>
+      <label class="check"><input type="checkbox" id="set-move" checked> Allow moving around</label>
     </div>
   </details>
 
@@ -60,6 +69,8 @@
   <div id="viewer">
     <div id="photo-wrap"><img id="photo" alt="" draggable="false"></div>
     <div id="mly"></div>
+    <div id="sv"></div>
+    <div id="sv-cover"></div>
     <div id="loading" class="loading"><div class="spinner"></div><p id="loading-text">Finding a spot...</p></div>
   </div>
 
@@ -72,6 +83,10 @@
   </div>
 
   <div id="photo-tabs" class="photo-tabs"></div>
+  <div id="sv-tools" class="sv-tools">
+    <button id="sv-reset" title="Go back to where you started">⟲ Back to start</button>
+    <button id="sv-skip" title="Nothing showing? Get a new spot, no penalty">Blank? New spot</button>
+  </div>
   <div class="zoom-hint" id="zoom-hint">Scroll or pinch to zoom · drag to look around</div>
 
   <!-- map guessing panel (classic, local, province) -->

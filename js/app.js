@@ -1,22 +1,22 @@
 import { CITIES, PROVINCES, REGIONS, LOCAL_CITIES } from './cities.js';
 import { haversineKm, mulberry32, hashString, weightedPick, shuffle, provinceAt, formatKm } from './geo.js';
-import { findCommonsRound, findMapillaryRound, showMapillary, clearMapillary } from './imagery.js';
+import { findCommonsRound, findMapillaryRound, showMapillary, clearMapillary, findStreetRound, showStreetEmbed, findGoogleRound, showGooglePano, resetGooglePano } from './imagery.js';
 
 const $ = (id) => document.getElementById(id);
 const MAX_ROUND = 5000;
 const CANADA_BOUNDS = [[41.7, -141], [70.5, -52.5]];
-const TILE_URL = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
+// OpenStreetMap's own tiles: free, no key (CARTO started requiring a key in 2026)
+const TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 const TILE_OPTS = {
-  subdomains: 'abcd',
   maxZoom: 19,
-  attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> © <a href="https://carto.com/attributions">CARTO</a>',
+  attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
 };
 
 const MODES = {
   daily: { icon: '📅', title: 'Daily Challenge', desc: 'The same 5 spots for everyone today, anywhere in Canada. One try per day.', kind: 'map' },
   classic: { icon: '🍁', title: 'Classic', desc: 'Drop a pin anywhere on the map. The closer you are, the more points.', kind: 'map' },
   city: { icon: '🏙️', title: 'City Guesser', desc: 'Which Canadian city or town are you standing in?', kind: 'city' },
-  province: { icon: '🗺️', title: 'Province Pick', desc: 'Click the province or territory the photo was taken in.', kind: 'province' },
+  province: { icon: '🗺️', title: 'Province Pick', desc: 'Click the province or territory you think you are in.', kind: 'province' },
   local: { icon: '📍', title: 'City Streets', desc: 'Zoomed into one city (pick it in Settings). Find the exact neighbourhood.', kind: 'map' },
   streak: { icon: '🔥', title: 'Province Streak', desc: 'Name the province, again and again. One miss and it is over.', kind: 'province' },
 };
@@ -36,9 +36,15 @@ const store = {
 
 // ---------------- settings ----------------
 const settings = Object.assign(
-  { rounds: 5, timer: 0, region: 'all', citydiff: 'easy', local: 'Toronto', source: 'commons', token: '', move: true },
+  { rounds: 5, timer: 0, region: 'all', citydiff: 'easy', local: 'Toronto', source: 'streetview', token: '', gkey: '', move: true },
   store.get('settings', {})
 );
+// older versions defaulted to still photos; move everyone over to Street View once
+if (!settings.v2) {
+  if (settings.source === 'commons') settings.source = 'streetview';
+  settings.v2 = true;
+  store.set('settings', settings);
+}
 
 function initSettings() {
   $('set-region').innerHTML = Object.entries(REGIONS).map(([k, r]) => `<option value="${k}">${r.label}</option>`).join('');
@@ -64,13 +70,14 @@ function initSettings() {
   bind('set-local', 'local');
   bind('set-source', 'source');
   bind('set-token', 'token');
+  bind('set-gkey', 'gkey');
   bind('set-move', 'move');
   updateTokenRow();
 }
 function updateTokenRow() {
-  const on = settings.source === 'mapillary';
-  $('token-row').style.display = on ? '' : 'none';
-  $('set-move').closest('label').style.display = on ? '' : 'none';
+  $('token-row').style.display = settings.source === 'mapillary' ? '' : 'none';
+  $('gkey-row').style.display = settings.source === 'google' ? '' : 'none';
+  $('set-move').closest('label').style.display = settings.source === 'commons' ? 'none' : '';
 }
 
 function bestKey(mode) {
@@ -168,8 +175,10 @@ async function findRound() {
     searchM: () => (G.mode === 'local' ? 1500 : G.mode === 'city' ? 2500 : 4000),
     used: G.used,
   };
-  const r = G.useMapillary
-    ? await findMapillaryRound({ ...opts, token: settings.token })
+  const src = G.source;
+  const r = src === 'mapillary' ? await findMapillaryRound({ ...opts, token: settings.token })
+    : src === 'google' ? await findGoogleRound({ ...opts, key: settings.gkey })
+    : src === 'streetview' ? await findStreetRound(opts)
     : await findCommonsRound(opts);
   // the real province comes from where the photo was taken (Ottawa photos can be in Gatineau, QC)
   r.prov = provinceAt(provinceGeo, r.lat, r.lon) || r.city.prov;
@@ -184,10 +193,15 @@ async function startGame(mode) {
     toast("You already played today's challenge. A new one unlocks at midnight Eastern.");
     return showSummary();
   }
-  if (mode !== 'daily' && settings.source === 'mapillary' && !settings.token) {
+  if (settings.source === 'mapillary' && !settings.token) {
     $('settings').open = true;
     $('set-token').focus();
-    return toast('Add your Mapillary token in Settings first, or switch Imagery back to Photos.');
+    return toast('Add your Mapillary token in Settings first, or pick a different Imagery option.');
+  }
+  if (settings.source === 'google' && !settings.gkey) {
+    $('settings').open = true;
+    $('set-gkey').focus();
+    return toast('Paste your Google Maps API key in Settings first, or pick "Google Street View (no key needed)".');
   }
   const seed = mode === 'daily' ? hashString('true-north-' + date) : (Math.random() * 2 ** 32) >>> 0;
   G = {
@@ -201,7 +215,8 @@ async function startGame(mode) {
     results: [],
     rng: mulberry32(seed),
     used: new Set(),
-    useMapillary: mode !== 'daily' && settings.source === 'mapillary',
+    // the Daily uses Street View (no key) unless you set up your own key, so everyone gets the same spots
+    source: mode === 'daily' ? (settings.source === 'google' ? 'google' : 'streetview') : settings.source,
     timerSecs: settings.timer,
     next: null,
   };
@@ -328,6 +343,22 @@ async function showImagery() {
   const r = G.current;
   const tabs = $('photo-tabs');
   tabs.innerHTML = '';
+  const sv = $('sv');
+  const streetMode = r.source === 'streetview' || r.source === 'google';
+  sv.classList.toggle('on', streetMode);
+  $('sv-tools').classList.toggle('on', streetMode);
+  $('sv-skip').style.display = r.source === 'streetview' ? '' : 'none';
+  $('sv-cover').style.display = r.source === 'streetview' ? 'block' : 'none';
+  if (!streetMode) sv.innerHTML = '';
+  if (streetMode) {
+    clearMapillary();
+    $('mly').classList.remove('on');
+    $('photo-wrap').style.display = 'none';
+    $('zoom-hint').style.display = 'none';
+    if (r.source === 'google') showGooglePano(sv, r, settings.move);
+    else showStreetEmbed(sv, r.lat, r.lon, r.heading);
+    return;
+  }
   if (r.source === 'mapillary') {
     $('photo-wrap').style.display = 'none';
     $('mly').classList.add('on');
@@ -605,7 +636,9 @@ function showResult(s, isLast) {
   requestAnimationFrame(() => setTimeout(() => ($('res-bar').style.width = (s.points / MAX_ROUND) * 100 + '%'), 30));
 
   // photo credit (shown after guessing because file names give the place away)
-  if (a.source === 'commons') {
+  if (a.source === 'streetview' || a.source === 'google') {
+    $('res-credit').innerHTML = `Imagery: Google Street View · <a href="https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${a.lat},${a.lon}" target="_blank" rel="noopener">Open this spot in Google Maps</a>`;
+  } else if (a.source === 'commons') {
     $('res-credit').innerHTML = 'Photo: ' + a.photos.map((p) =>
       `<a href="${p.page}" target="_blank" rel="noopener">${escapeHtml(p.artist).slice(0, 60)}</a>${p.license ? ' (' + escapeHtml(p.license) + ')' : ''}`).join(', ') + ' via Wikimedia Commons';
   } else {
@@ -731,6 +764,24 @@ function goHome() {
 
 // ---------------- wiring ----------------
 $('guess-btn').onclick = submitGuess;
+$('sv-reset').onclick = () => {
+  if (!G || !G.current) return;
+  if (G.current.source === 'google') resetGooglePano(G.current);
+  else showStreetEmbed($('sv'), G.current.lat, G.current.lon, G.current.heading);
+};
+// the no-key embed can't check coverage first, so let the player skip a blank spot for free
+$('sv-skip').onclick = async () => {
+  if (!G || G.answered) return;
+  setLoading(true, 'Finding a different spot...');
+  try {
+    G.current = await findRound();
+    if (G.mode === 'city') buildCityChoices();
+    await showImagery();
+  } catch (e) {
+    toast(e.message || 'Could not find another spot.');
+  }
+  setLoading(false);
+};
 $('quit').onclick = () => { if (confirmQuit()) goHome(); };
 function confirmQuit() {
   // no blocking dialogs: a second tap within 3s confirms
