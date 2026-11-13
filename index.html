@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>True North Guessr</title>
-<meta name="description" content="A Canada-only GeoGuessr-style game. Guess the spot, the city, or the province from real photos.">
+<meta name="description" content="A Canada-only GeoGuessr-style game with Street View. Guess the spot, the city, or the province, solo or 2 player split screen.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8D%81%3C/text%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <link rel="stylesheet" href="style.css">
@@ -15,8 +15,16 @@
 <section id="home" class="screen active">
   <header class="hero">
     <div class="logo">🍁 True North <span>Guessr</span></div>
-    <p class="tagline">Real photos from across Canada. Figure out where you are.</p>
+    <p class="tagline">Drop into Street View anywhere in Canada. Figure out where you are.</p>
   </header>
+
+  <div class="quickbar">
+    <label>Where to play
+      <select id="set-region"></select>
+    </label>
+    <label class="check"><input type="checkbox" id="set-urban"> Cities only (no highways or bush)</label>
+    <small>Applies to Classic, City Guesser, Cities Only and 2 Player.</small>
+  </div>
 
   <div class="modes" id="modes"></div>
 
@@ -29,11 +37,14 @@
       <label>Timer per round
         <select id="set-timer"><option value="0" selected>Off</option><option value="30">30 s</option><option value="60">60 s</option><option value="120">2 min</option></select>
       </label>
-      <label>Region (Classic &amp; City modes)
-        <select id="set-region"></select>
-      </label>
       <label>City mode difficulty
         <select id="set-citydiff"><option value="easy" selected>Easy: 4 choices</option><option value="hard">Hard: type the name</option></select>
+      </label>
+      <label>Player 1 name (2 Player)
+        <input id="set-p1" maxlength="20" placeholder="Player 1">
+      </label>
+      <label>Player 2 name (2 Player)
+        <input id="set-p2" maxlength="20" placeholder="Player 2">
       </label>
       <label>City for City Streets
         <select id="set-local"></select>
@@ -59,8 +70,8 @@
   </details>
 
   <footer class="credits">
-    Photos: <a href="https://commons.wikimedia.org" target="_blank" rel="noopener">Wikimedia Commons</a> contributors (credited after each round) ·
-    Map: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>, © <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>
+    Imagery: Google Street View (optional: Mapillary, Wikimedia Commons photos) ·
+    Map and roads: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors
   </footer>
 </section>
 
@@ -69,7 +80,7 @@
   <div id="viewer">
     <div id="photo-wrap"><img id="photo" alt="" draggable="false"></div>
     <div id="mly"></div>
-    <div id="sv"></div>
+    <div id="sv" class="sv-frame"></div>
     <div id="sv-cover"></div>
     <div id="loading" class="loading"><div class="spinner"></div><p id="loading-text">Finding a spot...</p></div>
   </div>
@@ -111,6 +122,44 @@
   </div>
 
   <button id="map-toggle" class="map-toggle">🗺️ Map</button>
+</section>
+
+<!-- 2 PLAYER SPLIT SCREEN -->
+<section id="duel" class="screen">
+  <div class="duel-bar">
+    <button class="hud-btn" id="duel-quit" title="Back to menu">✕</button>
+    <div class="duel-score"><span class="p0" id="d0-score-name">Player 1</span> <b id="d0-score">0</b></div>
+    <div class="duel-mid"><b id="duel-round">Round 1</b> <span id="duel-timer"></span></div>
+    <div class="duel-score"><b id="d1-score">0</b> <span class="p1" id="d1-score-name">Player 2</span></div>
+    <button id="duel-skip" class="mini-btn" title="Nothing showing? New spot for both, no penalty">Blank? New spot</button>
+  </div>
+  <div class="duel-halves">
+    <div class="half" id="d0">
+      <div class="half-view sv-frame" id="d0-view"></div>
+      <div class="half-cover" id="d0-cover"></div>
+      <div class="half-name p0" id="d0-name">Player 1</div>
+      <button class="half-reset" id="d0-reset" title="Back to where you started">⟲</button>
+      <div class="half-panel" id="d0-panel">
+        <div class="panel-top"><span>Place your pin</span><button class="mini" id="d0-size">⤢</button></div>
+        <div class="half-map" id="d0-map"></div>
+        <button class="primary half-lock p0" id="d0-lock" disabled>Lock in</button>
+      </div>
+      <div class="half-locked" id="d0-locked"><p id="d0-locked-text">Locked in!</p></div>
+    </div>
+    <div class="half" id="d1">
+      <div class="half-view sv-frame" id="d1-view"></div>
+      <div class="half-cover" id="d1-cover"></div>
+      <div class="half-name p1" id="d1-name">Player 2</div>
+      <button class="half-reset" id="d1-reset" title="Back to where you started">⟲</button>
+      <div class="half-panel" id="d1-panel">
+        <div class="panel-top"><span>Place your pin</span><button class="mini" id="d1-size">⤢</button></div>
+        <div class="half-map" id="d1-map"></div>
+        <button class="primary half-lock p1" id="d1-lock" disabled>Lock in</button>
+      </div>
+      <div class="half-locked" id="d1-locked"><p id="d1-locked-text">Locked in!</p></div>
+    </div>
+  </div>
+  <div id="duel-loading" class="loading"><div class="spinner"></div><p id="duel-loading-text">Finding a spot...</p></div>
 </section>
 
 <!-- ROUND RESULT -->

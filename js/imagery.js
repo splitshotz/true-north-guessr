@@ -172,8 +172,12 @@ export function clearMapillary() {
 const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter', 'https://overpass.private.coffee/api/interpreter'];
 const ROAD_TYPES = 'primary|secondary|tertiary|residential|unclassified|trunk|living_street';
 
-export async function roadPointNear(lat, lon, radiusM, rng) {
-  const q = `[out:json][timeout:15];way(around:${Math.round(radiusM)},${lat.toFixed(5)},${lon.toFixed(5)})[highway~"^(${ROAD_TYPES})$"];out geom 80;`;
+// city streets only: no highways or back roads
+const CITY_ROAD_TYPES = 'primary|secondary|tertiary|residential|living_street';
+
+export async function roadPointNear(lat, lon, radiusM, rng, urban = false) {
+  const types = urban ? CITY_ROAD_TYPES : ROAD_TYPES;
+  const q = `[out:json][timeout:15];way(around:${Math.round(radiusM)},${lat.toFixed(5)},${lon.toFixed(5)})[highway~"^(${types})$"];out geom 80;`;
   for (const base of OVERPASS) {
     try {
       const res = await fetch(base, { method: 'POST', body: 'data=' + encodeURIComponent(q), headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
@@ -191,11 +195,11 @@ export async function roadPointNear(lat, lon, radiusM, rng) {
 }
 
 // Mode 1: no key. Google's public Street View embed, pointed at a road.
-export async function findStreetRound({ pickCity, rng, spreadKm, used }) {
+export async function findStreetRound({ pickCity, rng, spreadKm, used, urban }) {
   for (let attempt = 0; attempt < 8; attempt++) {
     const city = pickCity(rng);
     const spot = offsetPoint(city, spreadKm(city), rng);
-    const road = await roadPointNear(spot.lat, spot.lon, 1500, rng);
+    const road = await roadPointNear(spot.lat, spot.lon, urban ? 700 : 1500, rng, urban);
     if (!road) continue;
     const id = road.lat.toFixed(4) + ',' + road.lon.toFixed(4);
     if (used.has(id)) continue;
@@ -233,7 +237,7 @@ function loadGoogleMaps(key) {
   return gmapsLoad;
 }
 
-export async function findGoogleRound({ pickCity, rng, spreadKm, used, key }) {
+export async function findGoogleRound({ pickCity, rng, spreadKm, used, key, urban }) {
   await loadGoogleMaps(key);
   const svc = new google.maps.StreetViewService();
   for (let attempt = 0; attempt < 10; attempt++) {
@@ -242,7 +246,7 @@ export async function findGoogleRound({ pickCity, rng, spreadKm, used, key }) {
     try {
       const { data } = await svc.getPanorama({
         location: { lat: spot.lat, lng: spot.lon },
-        radius: 2000,
+        radius: urban ? 600 : 2000,
         source: google.maps.StreetViewSource.OUTDOOR,
         preference: google.maps.StreetViewPreference.NEAREST,
       });
@@ -277,10 +281,11 @@ export function showGooglePano(container, round, allowMove) {
     scrollwheel: true,
     keyboardShortcuts: allowMove,
   });
+  return pano;
 }
-export function resetGooglePano(round) {
-  if (pano) {
-    pano.setPano(round.panoId);
-    pano.setPov({ heading: round.heading || 0, pitch: 0 });
+export function resetGooglePano(round, which = pano) {
+  if (which) {
+    which.setPano(round.panoId);
+    which.setPov({ heading: round.heading || 0, pitch: 0 });
   }
 }

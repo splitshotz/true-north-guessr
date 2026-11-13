@@ -14,6 +14,10 @@ A GeoGuessr-style game that only uses Canada. You get real photos taken somewher
 | 🗺️ **Province Pick** | Click the province or territory on the map. | 5,000 if right |
 | 📍 **City Streets** | Zoomed into one city (Toronto, Montreal, Vancouver, Calgary, and 11 more). Find the exact neighbourhood. | Very tight scoring, metres matter |
 | 🔥 **Province Streak** | Keep naming provinces until you get one wrong. | Longest streak |
+| 🌆 **Cities Only** | Classic, but always on a real city street (cities of 50k+), never highways or bush. | Same as Classic |
+| ⚔️ **2 Player Split Screen** | Both players get the same spot side by side, each with their own Street View and map. Lock in, then see who was closer. | Closest guess wins the round; highest total wins |
+
+**Where to play:** pick All of Canada, a region, or any single province or territory on the home screen. The "Cities only" box applies the city-streets rule to Classic, City Guesser and 2 Player too. Scoring gets tighter for smaller areas.
 
 Other features: round timer, 3/5/10 rounds, zoom and pan on photos (scroll, pinch, double-click), extra nearby photos as clues, personal bests, shareable emoji results, and a phone layout.
 

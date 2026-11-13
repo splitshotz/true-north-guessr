@@ -95,6 +95,19 @@ export const REGIONS = {
   quebec: { label: 'Quebec', provs: ['QC'] },
   atlantic: { label: 'Atlantic (NB, NS, PE, NL)', provs: ['NB', 'NS', 'PE', 'NL'] },
   north: { label: 'The North (YT, NT, NU)', provs: ['YT', 'NT', 'NU'] },
+  BC: { label: 'British Columbia', provs: ['BC'], single: true },
+  AB: { label: 'Alberta', provs: ['AB'], single: true },
+  SK: { label: 'Saskatchewan', provs: ['SK'], single: true },
+  MB: { label: 'Manitoba', provs: ['MB'], single: true },
+  ON: { label: 'Ontario', provs: ['ON'], single: true },
+  QC: { label: 'Quebec', provs: ['QC'], single: true },
+  NB: { label: 'New Brunswick', provs: ['NB'], single: true },
+  NS: { label: 'Nova Scotia', provs: ['NS'], single: true },
+  PE: { label: 'Prince Edward Island', provs: ['PE'], single: true },
+  NL: { label: 'Newfoundland and Labrador', provs: ['NL'], single: true },
+  YT: { label: 'Yukon', provs: ['YT'], single: true },
+  NT: { label: 'Northwest Territories', provs: ['NT'], single: true },
+  NU: { label: 'Nunavut', provs: ['NU'], single: true },
 };
 
 // cities for the "City Streets" mode: guess the exact spot inside one city

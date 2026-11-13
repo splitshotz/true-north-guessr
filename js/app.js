@@ -19,10 +19,22 @@ const MODES = {
   province: { icon: '🗺️', title: 'Province Pick', desc: 'Click the province or territory you think you are in.', kind: 'province' },
   local: { icon: '📍', title: 'City Streets', desc: 'Zoomed into one city (pick it in Settings). Find the exact neighbourhood.', kind: 'map' },
   streak: { icon: '🔥', title: 'Province Streak', desc: 'Name the province, again and again. One miss and it is over.', kind: 'province' },
+  urban: { icon: '🌆', title: 'Cities Only', desc: 'Classic pin drop, but always on a real city street. No highways or bush.', kind: 'map' },
+  duel: { icon: '⚔️', title: '2 Player Split Screen', desc: 'Same spot, two screens side by side. Closest guess wins the round.', kind: 'duel' },
 };
+// modes that follow the "Where to play" picker
+const REGIONAL = ['classic', 'city', 'urban', 'duel'];
 
 // distance (km) at which a classic guess drops to ~37% of max points
-const REGION_SCALE = { all: 600, west: 220, prairies: 300, ontario: 230, quebec: 260, atlantic: 200, north: 500 };
+// how far off (km) drops you to ~37% of the points; smaller places get tighter scoring
+function regionScale(region) {
+  if (!region || region === 'all') return 600;
+  const cs = regionCities(region);
+  if (cs.length < 2) return 60;
+  let d = 0;
+  for (const a of cs) for (const b of cs) d = Math.max(d, haversineKm(a, b));
+  return Math.min(600, Math.max(40, d / 6));
+}
 
 // ---------------- storage helpers ----------------
 const store = {
@@ -36,9 +48,12 @@ const store = {
 
 // ---------------- settings ----------------
 const settings = Object.assign(
-  { rounds: 5, timer: 0, region: 'all', citydiff: 'easy', local: 'Toronto', source: 'streetview', token: '', gkey: '', move: true },
+  { rounds: 5, timer: 0, region: 'all', citydiff: 'easy', local: 'Toronto', source: 'streetview', token: '', gkey: '', move: true, urban: false, p1: 'Player 1', p2: 'Player 2' },
   store.get('settings', {})
 );
+// old region names now map to the single-province options
+settings.region = { west: 'BC', ontario: 'ON', quebec: 'QC' }[settings.region] || settings.region;
+if (!REGIONS[settings.region]) settings.region = 'all';
 // older versions defaulted to still photos; move everyone over to Street View once
 if (!settings.v2) {
   if (settings.source === 'commons') settings.source = 'streetview';
@@ -47,7 +62,10 @@ if (!settings.v2) {
 }
 
 function initSettings() {
-  $('set-region').innerHTML = Object.entries(REGIONS).map(([k, r]) => `<option value="${k}">${r.label}</option>`).join('');
+  const opt = ([k, r]) => `<option value="${k}">${r.label}</option>`;
+  const groups = Object.entries(REGIONS).filter(([k, r]) => !r.single && !['west', 'ontario', 'quebec'].includes(k));
+  const singles = Object.entries(REGIONS).filter(([, r]) => r.single);
+  $('set-region').innerHTML = groups.map(opt).join('') + '<optgroup label="One province or territory">' + singles.map(opt).join('') + '</optgroup>';
   $('set-local').innerHTML = LOCAL_CITIES.map((n) => {
     const c = CITIES.find((x) => x.name === n);
     return `<option value="${n}">${n}, ${c.prov}</option>`;
@@ -71,6 +89,9 @@ function initSettings() {
   bind('set-source', 'source');
   bind('set-token', 'token');
   bind('set-gkey', 'gkey');
+  bind('set-urban', 'urban');
+  bind('set-p1', 'p1');
+  bind('set-p2', 'p2');
   bind('set-move', 'move');
   updateTokenRow();
 }
@@ -81,7 +102,7 @@ function updateTokenRow() {
 }
 
 function bestKey(mode) {
-  if (mode === 'classic' || mode === 'city') return `${mode}:${settings.region}:${settings.rounds}`;
+  if (REGIONAL.includes(mode)) return `${mode}:${settings.region}:${settings.urban ? 'u' : ''}:${settings.rounds}`;
   if (mode === 'local') return `local:${settings.local}:${settings.rounds}`;
   if (mode === 'province') return `province:${settings.rounds}`;
   return mode;
@@ -101,7 +122,7 @@ function renderModes() {
     else { const b = store.get('best-' + bestKey(k)); if (b) best = `Best: ${b.toLocaleString()} pts`; }
     let extra = '';
     if (k === 'local') extra = ` <b>(${settings.local})</b>`;
-    if ((k === 'classic' || k === 'city') && settings.region !== 'all') extra = ` <b>(${REGIONS[settings.region].label})</b>`;
+    if (REGIONAL.includes(k) && settings.region !== 'all') extra = ` <b>(${REGIONS[settings.region].label})</b>`;
     return `<button class="mode ${k === 'daily' ? 'daily' : ''}" data-mode="${k}">
       <span class="icon">${m.icon}</span><h3>${m.title}</h3><p>${m.desc}${extra}</p>
       <span class="best">${best}</span></button>`;
@@ -142,10 +163,18 @@ function cityWeight(c) {
   return Math.pow(c.pop, 0.45);
 }
 
-function spreadFor(mode, c) {
+function spreadFor(mode, c, g = G) {
   if (mode === 'local') return c.pop > 1000000 ? 13 : c.pop > 400000 ? 9 : 6;
   const base = c.pop > 1000000 ? 14 : c.pop > 300000 ? 9 : c.pop > 100000 ? 6 : c.pop > 30000 ? 4 : 2.5;
+  if (g && g.urban) return Math.min(7, base * 0.45); // stay in the built-up core
   return mode === 'city' ? base * 0.55 : base;
+}
+
+// cities only: real cities (50k+). Small provinces/territories fall back to their biggest towns.
+function urbanPool(pool) {
+  const big = pool.filter((c) => c.pop >= 50000);
+  if (big.length) return big;
+  return pool.slice().sort((a, b) => b.pop - a.pop).slice(0, 2);
 }
 
 function makePicker(mode) {
@@ -163,19 +192,22 @@ function makePicker(mode) {
       return weightedPick(byProv[p], cityWeight, rng);
     };
   }
-  const pool = mode === 'daily' ? CITIES : regionCities(G.region);
+  let pool = mode === 'daily' ? CITIES : regionCities(G.region);
+  if (G.urban) pool = urbanPool(pool);
   return (rng) => weightedPick(pool, cityWeight, rng);
 }
 
 async function findRound() {
+  const g = G; // keep a handle: the player can quit while a round is still loading
   const opts = {
-    pickCity: G.pickCity,
-    rng: G.rng,
-    spreadKm: (c) => spreadFor(G.mode, c),
-    searchM: () => (G.mode === 'local' ? 1500 : G.mode === 'city' ? 2500 : 4000),
-    used: G.used,
+    pickCity: g.pickCity,
+    rng: g.rng,
+    spreadKm: (c) => spreadFor(g.mode, c, g),
+    searchM: () => (g.mode === 'local' ? 1500 : g.mode === 'city' ? 2500 : 4000),
+    used: g.used,
+    urban: g.urban,
   };
-  const src = G.source;
+  const src = g.source;
   const r = src === 'mapillary' ? await findMapillaryRound({ ...opts, token: settings.token })
     : src === 'google' ? await findGoogleRound({ ...opts, key: settings.gkey })
     : src === 'streetview' ? await findStreetRound(opts)
@@ -207,7 +239,8 @@ async function startGame(mode) {
   G = {
     mode,
     date,
-    region: mode === 'daily' ? 'all' : settings.region,
+    region: REGIONAL.includes(mode) ? settings.region : 'all',
+    urban: mode === 'urban' || (settings.urban && REGIONAL.includes(mode)),
     localCity: settings.local,
     maxRounds: mode === 'streak' ? Infinity : mode === 'daily' ? 5 : settings.rounds,
     round: 0,
@@ -216,7 +249,9 @@ async function startGame(mode) {
     rng: mulberry32(seed),
     used: new Set(),
     // the Daily uses Street View (no key) unless you set up your own key, so everyone gets the same spots
-    source: mode === 'daily' ? (settings.source === 'google' ? 'google' : 'streetview') : settings.source,
+    source: mode === 'daily' ? (settings.source === 'google' ? 'google' : 'streetview')
+      // the 2 player mode needs one viewer per half, so Mapillary falls back to Street View
+      : mode === 'duel' && settings.source === 'mapillary' ? 'streetview' : settings.source,
     timerSecs: settings.timer,
     next: null,
   };
@@ -230,6 +265,7 @@ async function startGame(mode) {
     show('home');
     return toast('Could not load the map data. Check your connection.');
   }
+  if (mode === 'duel') { setLoading(false); return startDuel(); }
   setupGuessUI();
   nextRound();
 }
@@ -348,7 +384,7 @@ async function showImagery() {
   sv.classList.toggle('on', streetMode);
   $('sv-tools').classList.toggle('on', streetMode);
   $('sv-skip').style.display = r.source === 'streetview' ? '' : 'none';
-  $('sv-cover').style.display = r.source === 'streetview' ? 'block' : 'none';
+  $('sv-cover').style.display = 'none'; // the iframe is shifted up instead, which hides Google's address card
   if (!streetMode) sv.innerHTML = '';
   if (streetMode) {
     clearMapillary();
@@ -430,6 +466,10 @@ function regionBounds() {
     return [[c.lat - d, c.lon - d * 1.4], [c.lat + d, c.lon + d * 1.4]];
   }
   if (G.mode === 'daily' || G.region === 'all' || MODES[G.mode].kind === 'province') return CANADA_BOUNDS;
+  if (REGIONS[G.region].single && provinceGeo) {
+    const f = provinceGeo.features.find((x) => x.properties.code === G.region);
+    if (f) return L.geoJSON(f).getBounds().pad(0.05);
+  }
   const cs = regionCities(G.region);
   const lats = cs.map((c) => c.lat), lons = cs.map((c) => c.lon);
   return [[Math.min(...lats) - 1.5, Math.min(...lons) - 2], [Math.max(...lats) + 1.5, Math.max(...lons) + 2]];
@@ -514,11 +554,13 @@ let timerHandle = null;
 function startTimer() {
   clearInterval(timerHandle);
   const box = $('hud-timer-box');
+  $('duel-timer').style.display = G.timerSecs ? '' : 'none';
   if (!G.timerSecs) { box.style.display = 'none'; return; }
   box.style.display = 'flex';
   let left = G.timerSecs;
   const tick = () => {
     $('hud-timer').textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+    $('duel-timer').textContent = '⏱ ' + $('hud-timer').textContent;
     box.classList.toggle('low', left <= 10);
   };
   tick();
@@ -528,7 +570,8 @@ function startTimer() {
     if (left <= 0) {
       clearInterval(timerHandle);
       toast("Time's up!");
-      if (MODES[G.mode].kind === 'city') submitCity(null);
+      if (G.mode === 'duel') duelTimeUp();
+      else if (MODES[G.mode].kind === 'city') submitCity(null);
       else submitGuess();
     }
   }, 1000);
@@ -542,7 +585,7 @@ function scoreRound() {
   if (kind === 'map') {
     if (!g) return { points: 0, km: null };
     const km = haversineKm(g, a);
-    const scale = G.mode === 'local' ? 1.8 : G.mode === 'daily' ? REGION_SCALE.all : REGION_SCALE[G.region];
+    const scale = G.mode === 'local' ? 1.8 : G.mode === 'daily' ? regionScale('all') : regionScale(G.region);
     let points = Math.round(MAX_ROUND * Math.exp(-km / scale));
     if (km < (G.mode === 'local' ? 0.05 : 0.15)) points = MAX_ROUND;
     return { points, km };
@@ -632,6 +675,7 @@ function showResult(s, isLast) {
   }
   $('res-text').innerHTML = text;
   $('res-points').textContent = `${s.points.toLocaleString()} points`;
+  $('res-bar').parentElement.style.display = '';
   $('res-bar').style.width = '0';
   requestAnimationFrame(() => setTimeout(() => ($('res-bar').style.width = (s.points / MAX_ROUND) * 100 + '%'), 30));
 
@@ -756,6 +800,7 @@ async function share() {
 
 function goHome() {
   clearInterval(timerHandle);
+  ['sv', 'd0-view', 'd1-view'].forEach((id) => ($(id).innerHTML = ''));
   clearMapillary();
   G = null;
   renderModes();
@@ -829,3 +874,236 @@ document.addEventListener('keydown', (e) => {
 initSettings();
 initPhotoViewer();
 renderModes();
+
+// ---------------- 2 player split screen ----------------
+const duelMaps = [null, null];
+const duelLayers = [null, null];
+const duelPanos = [null, null];
+const P_COLORS = ['#d52b1e', '#2f6fde'];
+
+function playerName(i) {
+  return ((i === 0 ? settings.p1 : settings.p2) || '').trim() || `Player ${i + 1}`;
+}
+
+function setDuelLoading(on, text = 'Finding a spot...') {
+  $('duel-loading').classList.toggle('on', on);
+  $('duel-loading-text').textContent = text;
+}
+
+function startDuel() {
+  G.duel = { scores: [0, 0], wins: [0, 0] };
+  show('duel');
+  for (let i = 0; i < 2; i++) {
+    $(`d${i}-name`).textContent = playerName(i);
+    $(`d${i}-score-name`).textContent = playerName(i);
+    if (!duelMaps[i]) {
+      duelMaps[i] = L.map(`d${i}-map`, { worldCopyJump: true });
+      L.tileLayer(TILE_URL, TILE_OPTS).addTo(duelMaps[i]);
+      duelMaps[i].attributionControl.setPrefix(false);
+      duelMaps[i].on('click', (e) => duelPin(i, e.latlng.wrap()));
+      $(`d${i}-panel`).addEventListener('transitionend', () => duelMaps[i].invalidateSize());
+    }
+  }
+  nextDuelRound();
+}
+
+function updateDuelHud() {
+  $('duel-round').textContent = `Round ${G.round} / ${G.maxRounds}`;
+  $('d0-score').textContent = G.duel.scores[0].toLocaleString();
+  $('d1-score').textContent = G.duel.scores[1].toLocaleString();
+}
+
+async function nextDuelRound() {
+  G.round++;
+  G.answered = false;
+  G.duel.guess = [null, null];
+  G.duel.locked = [false, false];
+  updateDuelHud();
+  for (let i = 0; i < 2; i++) {
+    $(`d${i}-lock`).disabled = true;
+    $(`d${i}-locked`).classList.remove('on');
+  }
+  setDuelLoading(true, G.round === 1 ? 'Finding a spot for both of you...' : 'Finding the next spot...');
+  try {
+    G.current = await (G.next || findRound());
+  } catch (e) {
+    G.next = null;
+    setDuelLoading(false);
+    show('home');
+    return toast(e.message || 'Something went wrong loading that round.');
+  }
+  G.next = null;
+  showDuelImagery();
+  for (let i = 0; i < 2; i++) {
+    if (duelLayers[i]) duelMaps[i].removeLayer(duelLayers[i]);
+    duelLayers[i] = L.layerGroup().addTo(duelMaps[i]);
+  }
+  setTimeout(() => duelMaps.forEach((m) => { m.invalidateSize(); m.fitBounds(regionBounds()); }), 250);
+  setDuelLoading(false);
+  startTimer();
+}
+
+function showDuelImagery() {
+  const r = G.current;
+  for (let i = 0; i < 2; i++) {
+    const v = $(`d${i}-view`);
+    v.innerHTML = '';
+    $(`d${i}-cover`).style.display = 'none';
+    if (r.source === 'google') duelPanos[i] = showGooglePano(v, r, settings.move);
+    else if (r.source === 'streetview') showStreetEmbed(v, r.lat, r.lon, r.heading);
+    else {
+      const img = document.createElement('img');
+      img.src = r.photos[0].url;
+      img.className = 'duel-photo';
+      img.alt = '';
+      v.appendChild(img);
+    }
+  }
+  $('duel-skip').style.display = r.source === 'streetview' ? '' : 'none';
+}
+
+function duelPin(i, ll) {
+  if (!G || G.mode !== 'duel' || G.answered || G.duel.locked[i]) return;
+  G.duel.guess[i] = { lat: ll.lat, lon: ll.lng };
+  duelLayers[i].clearLayers();
+  L.marker(ll, { icon: pinIcon(i === 0 ? 'guess' : 'guess2') }).addTo(duelLayers[i]);
+  $(`d${i}-lock`).disabled = false;
+}
+
+function duelLock(i) {
+  if (!G || G.answered || !G.duel.guess[i]) return;
+  G.duel.locked[i] = true;
+  $(`d${i}-locked`).classList.add('on');
+  $(`d${i}-locked-text`).textContent = G.duel.locked[1 - i] ? 'Locked in!' : `Locked in! Waiting for ${playerName(1 - i)}...`;
+  if (G.duel.locked[0] && G.duel.locked[1]) finishDuelRound();
+}
+
+function duelTimeUp() {
+  finishDuelRound();
+}
+
+function finishDuelRound() {
+  if (G.answered) return;
+  G.answered = true;
+  clearInterval(timerHandle);
+  const a = G.current;
+  const scale = regionScale(G.region);
+  const res = G.duel.guess.map((g) => {
+    if (!g) return { points: 0, km: null };
+    const km = haversineKm(g, a);
+    return { km, points: km < 0.15 ? MAX_ROUND : Math.round(MAX_ROUND * Math.exp(-km / scale)) };
+  });
+  res.forEach((r, i) => (G.duel.scores[i] += r.points));
+  const winner = res[0].points === res[1].points ? -1 : res[0].points > res[1].points ? 0 : 1;
+  if (winner >= 0) G.duel.wins[winner]++;
+  G.results.push({
+    points: Math.max(res[0].points, res[1].points),
+    answer: { lat: a.lat, lon: a.lon, city: a.city.name, prov: a.prov },
+    duel: { res, winner, guesses: G.duel.guess.slice() },
+  });
+  const isLast = G.round >= G.maxRounds;
+  if (!isLast) { G.next = findRound(); G.next.catch(() => {}); }
+  showDuelResult(res, winner, isLast);
+}
+
+function showDuelResult(res, winner, isLast) {
+  show('result');
+  resultMap = ensureMap(resultMap, 'result-map');
+  if (resultLayer) resultMap.removeLayer(resultLayer);
+  resultLayer = L.layerGroup().addTo(resultMap);
+  const a = G.current;
+  const ansLL = [a.lat, a.lon];
+  L.marker(ansLL, { icon: pinIcon('answer') }).addTo(resultLayer).bindTooltip('Actual spot');
+  const pts = [ansLL];
+  G.duel.guess.forEach((g, i) => {
+    if (!g) return;
+    const gl = [g.lat, g.lon];
+    L.marker(gl, { icon: pinIcon(i === 0 ? 'guess' : 'guess2') }).addTo(resultLayer).bindTooltip(playerName(i));
+    L.polyline([gl, ansLL], { color: P_COLORS[i], weight: 3, dashArray: '6 6' }).addTo(resultLayer);
+    pts.push(gl);
+  });
+  const line = (i) => `<span style="color:${P_COLORS[i]};font-weight:700">${escapeHtml(playerName(i))}</span>: ` +
+    (res[i].km === null ? 'no guess' : `${formatKm(res[i].km)} away`) + ` → <b>${res[i].points.toLocaleString()}</b>`;
+  $('res-points').textContent = winner < 0 ? "It's a tie!" : `${playerName(winner)} wins the round!`;
+  $('res-bar').parentElement.style.display = 'none';
+  $('res-text').innerHTML = `${line(0)}<br>${line(1)}<br>It was near <b>${a.city.name}, ${PROVINCES[a.prov]}</b>.`;
+  $('res-credit').innerHTML = (a.source === 'streetview' || a.source === 'google')
+    ? `Imagery: Google Street View · <a href="https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${a.lat},${a.lon}" target="_blank" rel="noopener">Open this spot in Google Maps</a>`
+    : a.photos ? 'Photo via Wikimedia Commons: ' + a.photos.slice(0, 1).map((p) => `<a href="${p.page}" target="_blank" rel="noopener">${escapeHtml(p.artist).slice(0, 60)}</a>`).join('') : '';
+  $('next-btn').textContent = isLast ? 'See final score' : 'Next round';
+  $('next-btn').onclick = () => (isLast ? showDuelSummary() : (show('duel'), nextDuelRound()));
+  setTimeout(() => {
+    resultMap.invalidateSize();
+    if (pts.length > 1) resultMap.fitBounds(pts, { paddingTopLeft: [50, 80], paddingBottomRight: [50, cardSpace()], maxZoom: 14 });
+    else resultMap.setView(ansLL, 11);
+  }, 30);
+}
+
+function showDuelSummary() {
+  G.finished = true;
+  show('summary');
+  const [s0, s1] = G.duel.scores;
+  const w = s0 === s1 ? -1 : s0 > s1 ? 0 : 1;
+  $('sum-title').textContent = '2 Player Split Screen';
+  $('sum-points').innerHTML = `<span style="color:${P_COLORS[0]}">${s0.toLocaleString()}</span> vs <span style="color:${P_COLORS[1]}">${s1.toLocaleString()}</span>`;
+  $('sum-best').textContent = w < 0 ? "🤝 It's a tie!" : `🏆 ${playerName(w)} wins! (${G.duel.wins[w]} of ${G.results.length} rounds)`;
+  $('sum-table').innerHTML = `<tr><td><b>Round</b></td><td style="color:${P_COLORS[0]}">${escapeHtml(playerName(0))}</td><td style="color:${P_COLORS[1]}">${escapeHtml(playerName(1))}</td></tr>` +
+    G.results.map((r, i) => `<tr><td>${i + 1}. ${r.answer.city}, ${r.answer.prov}</td><td>${r.duel.res[0].points.toLocaleString()}${r.duel.winner === 0 ? ' 🏆' : ''}</td><td>${r.duel.res[1].points.toLocaleString()}${r.duel.winner === 1 ? ' 🏆' : ''}</td></tr>`).join('');
+  summaryMap = ensureMap(summaryMap, 'summary-map');
+  if (summaryLayer) summaryMap.removeLayer(summaryLayer);
+  summaryLayer = L.layerGroup().addTo(summaryMap);
+  const pts = [];
+  G.results.forEach((r, k) => {
+    const a = [r.answer.lat, r.answer.lon];
+    L.marker(a, { icon: pinIcon('answer') }).addTo(summaryLayer).bindTooltip(`Round ${k + 1}: ${r.answer.city}`);
+    pts.push(a);
+    r.duel.guesses.forEach((g, i) => {
+      if (!g) return;
+      L.marker([g.lat, g.lon], { icon: pinIcon(i === 0 ? 'guess' : 'guess2') }).addTo(summaryLayer);
+      L.polyline([[g.lat, g.lon], a], { color: P_COLORS[i], weight: 2, dashArray: '6 6' }).addTo(summaryLayer);
+      pts.push([g.lat, g.lon]);
+    });
+  });
+  setTimeout(() => {
+    summaryMap.invalidateSize();
+    if (pts.length) summaryMap.fitBounds(pts, { paddingTopLeft: [50, 50], paddingBottomRight: [50, cardSpace()], maxZoom: 12 });
+  }, 30);
+  $('share-msg').textContent = '';
+  $('again-btn').style.display = '';
+  $('again-btn').onclick = () => startGame('duel');
+  $('menu-btn').onclick = goHome;
+  $('share-btn').onclick = async () => {
+    const text = `🍁 True North Guessr: 2 Player\n${playerName(0)} ${s0.toLocaleString()} vs ${playerName(1)} ${s1.toLocaleString()}\n` +
+      (w < 0 ? 'Tie!' : `${playerName(w)} wins 🏆`) + `\n${location.href.split('#')[0].split('?')[0]}`;
+    try {
+      if (navigator.share) { await navigator.share({ text }); return; }
+      await navigator.clipboard.writeText(text);
+      $('share-msg').textContent = 'Copied to clipboard!';
+    } catch { $('share-msg').textContent = text; }
+  };
+}
+
+for (let i = 0; i < 2; i++) {
+  $(`d${i}-lock`).onclick = () => duelLock(i);
+  $(`d${i}-reset`).onclick = () => {
+    if (!G || !G.current) return;
+    if (G.current.source === 'google') resetGooglePano(G.current, duelPanos[i]);
+    else if (G.current.source === 'streetview') showStreetEmbed($(`d${i}-view`), G.current.lat, G.current.lon, G.current.heading);
+  };
+  $(`d${i}-size`).onclick = () => {
+    $(`d${i}-panel`).classList.toggle('big');
+    setTimeout(() => duelMaps[i] && duelMaps[i].invalidateSize(), 220);
+  };
+}
+$('duel-quit').onclick = () => { if (confirmQuit()) goHome(); };
+$('duel-skip').onclick = async () => {
+  if (!G || G.answered) return;
+  setDuelLoading(true, 'Finding a different spot...');
+  try {
+    G.current = await findRound();
+    showDuelImagery();
+  } catch (e) {
+    toast(e.message || 'Could not find another spot.');
+  }
+  setDuelLoading(false);
+};
